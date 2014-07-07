@@ -31,7 +31,6 @@ import com.google.inject.spi.ProviderInstanceBinding;
 import com.google.inject.spi.ProviderWithExtensionVisitor;
 import com.google.inject.spi.ProvidesMethodBinding;
 import com.google.inject.spi.ProvidesMethodTargetVisitor;
-
 import java.lang.annotation.Annotation;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -43,7 +42,7 @@ import java.util.Set;
  *
  * @author jessewilson@google.com (Jesse Wilson)
  */
-public class ProviderMethod<T> implements ProviderWithExtensionVisitor<T>, HasDependencies,
+class ProviderMethod<T> implements ProviderWithExtensionVisitor<T>, HasDependencies,
     ProvidesMethodBinding<T> {
   private final Key<T> key;
   private final Class<? extends Annotation> scopeAnnotation;
@@ -56,7 +55,7 @@ public class ProviderMethod<T> implements ProviderWithExtensionVisitor<T>, HasDe
   /**
    * @param method the method to invoke. It's return type must be the same type as {@code key}.
    */
-  ProviderMethod(Key<T> key, Method method, Object instance,
+  public ProviderMethod(Key<T> key, Method method, Object instance,
       ImmutableSet<Dependency<?>> dependencies, List<Provider<?>> parameterProviders,
       Class<? extends Annotation> scopeAnnotation) {
     this.key = key;
@@ -70,10 +69,12 @@ public class ProviderMethod<T> implements ProviderWithExtensionVisitor<T>, HasDe
     method.setAccessible(true);
   }
 
+  @Override
   public Key<T> getKey() {
     return key;
   }
 
+  @Override
   public Method getMethod() {
     return method;
   }
@@ -82,7 +83,8 @@ public class ProviderMethod<T> implements ProviderWithExtensionVisitor<T>, HasDe
   public Object getInstance() {
     return instance;
   }
-  
+
+  @Override
   public Object getEnclosingInstance() {
     return instance;
   }
@@ -103,6 +105,7 @@ public class ProviderMethod<T> implements ProviderWithExtensionVisitor<T>, HasDe
     }
   }
 
+  @Override
   public T get() {
     Object[] parameters = new Object[parameterProviders.size()];
     for (int i = 0; i < parameters.length; i++) {
@@ -121,10 +124,12 @@ public class ProviderMethod<T> implements ProviderWithExtensionVisitor<T>, HasDe
     }
   }
 
+  @Override
   public Set<Dependency<?>> getDependencies() {
     return dependencies;
   }
-  
+
+  @Override
   @SuppressWarnings("unchecked")
   public <B, V> V acceptExtensionVisitor(BindingTargetVisitor<B, V> visitor,
       ProviderInstanceBinding<? extends B> binding) {
@@ -137,7 +142,7 @@ public class ProviderMethod<T> implements ProviderWithExtensionVisitor<T>, HasDe
   @Override public String toString() {
     return "@Provides " + StackTraceElements.forMember(method).toString();
   }
-  
+
   @Override
   public boolean equals(Object obj) {
     if (obj instanceof ProviderMethod) {
@@ -148,7 +153,7 @@ public class ProviderMethod<T> implements ProviderWithExtensionVisitor<T>, HasDe
       return false;
     }
   }
-  
+
   @Override
   public int hashCode() {
     // Avoid calling hashCode on 'instance', which is a user-object
