@@ -15,21 +15,22 @@
  */
 package com.google.inject.daggeradapter;
 
-import static com.google.common.base.Predicates.instanceOf;
-import static com.google.common.base.Predicates.not;
-
 import com.google.common.base.Function;
 import com.google.common.base.MoreObjects;
+import com.google.common.base.Predicate;
 import com.google.common.collect.FluentIterable;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableListMultimap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
+import com.google.common.collect.Sets;
 import com.google.inject.Binder;
 import com.google.inject.Module;
 import com.google.inject.internal.ProviderMethodsModule;
 import com.google.inject.spi.ModuleAnnotatedMethodScanner;
 import java.lang.reflect.Constructor;
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.util.ArrayDeque;
 import java.util.Collection;
 import java.util.Deque;
@@ -37,6 +38,10 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+
+import static com.google.common.base.Predicates.instanceOf;
+import static com.google.common.base.Predicates.not;
+import static java.lang.reflect.Modifier.isStatic;
 
 /**
  * A utility to adapt classes annotated with {@link @dagger.Module} such that their
@@ -76,6 +81,13 @@ public final class DaggerAdapter {
           return (input instanceof Class) ? (Class<?>) input : input.getClass();
         }
       };
+      private static final Predicate<Class<?>> IS_ABSTRACT =
+              new Predicate<Class<?>>() {
+                @Override
+                public boolean apply(Class<?> type) {
+                  return type.isInterface() || Modifier.isAbstract(type.getModifiers());
+                }
+              };
 
   /**
    * Returns a guice module from a dagger module.
@@ -101,12 +113,39 @@ public final class DaggerAdapter {
     @Override
     public void configure(Binder binder) {
       List<Object> givenInstances = extractPreInstantiatedModules(binder, daggerModuleObjects);
-      Set<Class<?>> preInstantiatedTypes = extractTypes(givenInstances);
-      Set<Class<?>> knownTypes = extractTypes(daggerModuleObjects);
-      Set<Class<?>> toInstantiate = typesToInstantiate(binder, preInstantiatedTypes, knownTypes);
+      Set<Class<?>> preInstantiatedModules = extractTypes(givenInstances);
+      ImmutableSet<Class<?>> knownTypes = knownTypes(binder, extractTypes(daggerModuleObjects));
+
+      // register any static @Provides methods, which may occur on any module type.
+      registerStaticProvides(knownTypes);
+
+      Set<Class<?>> uninstantiatedTypes = Sets.difference(knownTypes, preInstantiatedModules);
+
+      // register bindings from abstract types
+      registerBinds(Sets.filter(uninstantiatedTypes, IS_ABSTRACT));
+
+      // instantiate remaining concrete types
+      Set<Class<?>> toInstantiate = Sets.filter(uninstantiatedTypes, not(IS_ABSTRACT));
       Iterable<Object> instantiatedModules = instantiateModuleTypes(binder, toInstantiate);
       for (Object module : Iterables.concat(givenInstances, instantiatedModules)) {
         binder.install(ProviderMethodsModule.forModule(module, DaggerMethodScanner.INSTANCE));
+      }
+    }
+
+    private void registerBinds(Set<Class<?>> filter) {
+
+    }
+
+    private void registerStaticProvides(Set<Class<?>> moduleTypes) {
+      // TODO(cgruber) Confirm behavior with Dagger re: static methods from parent types.
+      for (Class<?> type : moduleTypes) {
+        for (Method method : type.getDeclaredMethods()) {
+          if (isStatic(method.getModifiers())) {
+            if (method.isAnnotationPresent(dagger.Provides.class)) {
+
+            }
+          }
+        }
       }
     }
 
@@ -139,16 +178,13 @@ public final class DaggerAdapter {
 
     /**
      * Scans the graph of module inclusions for all known module times, validating that the types
-     * found are actually dagger {@code @}{@link dagger.Module} types, and removes
-     * already-instantiated modules from the final set before returning it.
+     * found are actually dagger {@code @}{@link dagger.Module} types.
      *
      * @param binder the Guice binder to which errors can be reported.
-     * @param preInstantiatedTypes the types of those modules passed in as instances
      * @param initialModuleTypes the initial set of types to scan
-     * @return
+     * @return the set of all module types referenced from the given types
      */
-    static ImmutableSet<Class<?>> typesToInstantiate(
-        Binder binder, Set<Class<?>> preInstantiatedTypes, Set<Class<?>> initialModuleTypes) {
+    static ImmutableSet<Class<?>> knownTypes(Binder binder, Set<Class<?>> initialModuleTypes) {
       Deque<Class<?>> toScan = new ArrayDeque<Class<?>>(initialModuleTypes);
       LinkedHashSet<Class<?>> seen = new LinkedHashSet<Class<?>>();
       while (!toScan.isEmpty()) {
@@ -168,7 +204,6 @@ public final class DaggerAdapter {
           toScan.addAll(ImmutableList.copyOf(annotation.includes()));
         }
       }
-      seen.removeAll(preInstantiatedTypes);
       return ImmutableSet.copyOf(seen);
     }
 

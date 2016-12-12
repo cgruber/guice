@@ -19,14 +19,10 @@ import com.google.common.collect.ImmutableSet;
 import com.google.inject.Binder;
 import com.google.inject.Key;
 import com.google.inject.internal.UniqueAnnotations;
-import com.google.inject.multibindings.Multibinder;
 import com.google.inject.spi.InjectionPoint;
 import com.google.inject.spi.ModuleAnnotatedMethodScanner;
+import dagger.Binds;
 import dagger.Provides;
-import dagger.Provides.Type;
-import dagger.multibindings.ElementsIntoSet;
-import dagger.multibindings.IntoMap;
-import dagger.multibindings.IntoSet;
 import java.lang.annotation.Annotation;
 import java.lang.reflect.Method;
 import java.util.Set;
@@ -38,8 +34,11 @@ import java.util.Set;
  */
 final class DaggerMethodScanner extends ModuleAnnotatedMethodScanner {
   static final DaggerMethodScanner INSTANCE = new DaggerMethodScanner();
+
+  @SuppressWarnings("unchecked")
   private static final ImmutableSet<Class<? extends Annotation>> ANNOTATIONS =
       ImmutableSet.of(
+          dagger.Binds.class,
           dagger.Provides.class,
           // The following are consumed for validation, to ensure that dagger modules
           // get annotated by non-dagger annotations.
@@ -55,57 +54,19 @@ final class DaggerMethodScanner extends ModuleAnnotatedMethodScanner {
 
   @Override
   public <T> Key<T> prepareMethod(
-      Binder binder, Annotation rawAnnotation, Key<T> key, InjectionPoint injectionPoint) {
-    Method providesMethod = (Method) injectionPoint.getMember();
-    if (!validateAnnotation(binder, providesMethod, rawAnnotation)) {
-      return Key.get(key.getTypeLiteral(), UniqueAnnotations.create()); // don't bind bad method.
-    }
-    Provides annotation = (Provides) rawAnnotation;
-    if (providesMethod.isAnnotationPresent(IntoSet.class)) {
-      return processSetBinding(binder, key);
-    } else if (providesMethod.isAnnotationPresent(ElementsIntoSet.class)) {
-      binder.addError("@ElementsIntoSet contributions are not suppored by Guice.", providesMethod);
-      return key;
-    } else if (providesMethod.isAnnotationPresent(IntoMap.class)) {
-      /* TODO(cgruber) implement map bindings */
-      binder.addError("Map bindings are not yet supported.");
-      return key;
-    }
-
-    switch (annotation.type()) {
-      case UNIQUE:
-        return key;
-      case MAP:
-        /* TODO(cgruber) implement map bindings */
-        binder.addError("Map bindings are not yet supported.");
-        return key;
-      case SET:
-        return processSetBinding(binder, key);
-      case SET_VALUES:
-        binder.addError(
-            Type.SET_VALUES.name() + " contributions are not supported by Guice.", providesMethod);
-        return key;
-      default:
-        binder.addError("Unknown @Provides type " + annotation.type() + ".", providesMethod);
-        return key;
-    }
-  }
-
-  private boolean validateAnnotation(Binder binder, Method method, Annotation annotation) {
-    if (annotation.annotationType().getName().startsWith("com.google.inject")) {
+      Binder binder, Annotation annotation, Key<T> key, InjectionPoint injectionPoint) {
+    Method method = (Method) injectionPoint.getMember();
+    if (annotation instanceof Binds) {
+      return BindsHandler.process(binder, key, method);
+    } else if (annotation instanceof Provides) {
+      return ProvidesHandler.process(binder, (Provides) annotation, key, method);
+    } else {
       binder.addError(
-          "Method %s was annotated with %s instead of @dagger.Provides.",
+          "Method %s annotated with non-dagger annotation %s.",
           method, annotation.annotationType().getName());
-      return false;
+      return Key.get(
+          key.getTypeLiteral(), UniqueAnnotations.create()); // don't bind from bad method.
     }
-    return true;
-  }
-
-  private static <T> Key<T> processSetBinding(Binder binder, Key<T> key) {
-    Multibinder<T> setBinder = Multibinder.newSetBinder(binder, key.getTypeLiteral());
-    Key<T> newKey = Key.get(key.getTypeLiteral(), UniqueAnnotations.create());
-    setBinder.addBinding().to(newKey);
-    return newKey;
   }
 
   private DaggerMethodScanner() {}

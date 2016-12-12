@@ -15,9 +15,6 @@
  */
 package com.google.inject.daggeradapter;
 
-import static com.google.common.truth.Truth.assertThat;
-import static com.google.common.truth.Truth.assertWithMessage;
-
 import com.google.common.collect.ImmutableSet;
 import com.google.inject.AbstractModule;
 import com.google.inject.Binder;
@@ -29,9 +26,16 @@ import com.google.inject.Module;
 import com.google.inject.multibindings.Multibinder;
 import com.google.inject.spi.Message;
 import com.google.inject.util.Providers;
+import dagger.Binds;
 import dagger.multibindings.IntoSet;
 import java.util.Set;
+import javax.inject.Inject;
+import javax.inject.Named;
+import javax.inject.Qualifier;
 import junit.framework.TestCase;
+
+import static com.google.common.truth.Truth.assertThat;
+import static com.google.common.truth.Truth.assertWithMessage;
 
 /**
  * Tests for {@link DaggerAdapter}.
@@ -42,14 +46,52 @@ public class DaggerAdapterTest extends TestCase {
   @dagger.Module
   static class SimpleDaggerModule {
     @dagger.Provides
+    @Named("test")
     Integer anInteger() {
       return 1;
     }
   }
 
   public void testSimpleModule() {
-    Injector i = createInjector(DaggerAdapter.from(new SimpleDaggerModule()));
+    Injector i = createInjector(DaggerAdapter.from(SimpleDaggerModule.class));
     assertThat(i.getInstance(Integer.class)).isEqualTo(1);
+  }
+
+  interface Foo {}
+
+  static class FooA {
+    @Inject
+    FooA() {}
+  }
+
+  static class FooB {
+    @Inject
+    FooB() {}
+  }
+
+  @Qualifier
+  @interface A {}
+
+  @Qualifier
+  @interface B {}
+
+  @dagger.Module
+  abstract static class SimpleAbstractModule {
+    @Binds
+    abstract @A Foo foo(FooA a);
+  }
+
+  @dagger.Module
+  interface SimpleInterfaceModule {
+    @Binds
+    @B
+    Foo foo(FooB b);
+  }
+
+  public void testAbstractModuleTypes() {
+    Injector i = createInjector(DaggerAdapter.from(SimpleInterfaceModule.class));
+    assertThat(i.getInstance(Key.get(Foo.class, A.class))).isNotNull();
+    assertThat(i.getInstance(Key.get(Foo.class, B.class))).isNotNull();
   }
 
   static class SimpleGuiceModule extends AbstractModule {
@@ -87,6 +129,7 @@ public class DaggerAdapterTest extends TestCase {
       createInjector(DaggerAdapter.from(new Includer(), new Includer()));
       fail("Should have thrown.");
     } catch (CreationException e) {
+      System.out.println(e);
       assertThat(e.getErrorMessages()).hasSize(2);
       // Unsure if the order of messages will always be consistent.
       boolean hasError = false;
