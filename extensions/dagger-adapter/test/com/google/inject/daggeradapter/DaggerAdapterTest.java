@@ -15,15 +15,19 @@
  */
 package com.google.inject.daggeradapter;
 
+import static com.google.common.truth.Truth.assertThat;
+import static com.google.common.truth.Truth.assertWithMessage;
+
 import com.google.common.collect.ImmutableSet;
 import com.google.inject.AbstractModule;
 import com.google.inject.Binder;
+import com.google.inject.CreationException;
 import com.google.inject.Guice;
 import com.google.inject.Injector;
 import com.google.inject.Key;
 import com.google.inject.Module;
-import com.google.inject.Provides;
 import com.google.inject.multibindings.Multibinder;
+import com.google.inject.spi.Message;
 import com.google.inject.util.Providers;
 import dagger.multibindings.IntoSet;
 import java.util.Set;
@@ -34,7 +38,6 @@ import junit.framework.TestCase;
  *
  * @author cgruber@google.com (Christian Gruber)
  */
-
 public class DaggerAdapterTest extends TestCase {
   @dagger.Module
   static class SimpleDaggerModule {
@@ -45,12 +48,12 @@ public class DaggerAdapterTest extends TestCase {
   }
 
   public void testSimpleModule() {
-    Injector i = Guice.createInjector(DaggerAdapter.from(new SimpleDaggerModule()));
-    assertEquals((Integer) 1, i.getInstance(Integer.class));
+    Injector i = createInjector(DaggerAdapter.from(new SimpleDaggerModule()));
+    assertThat(i.getInstance(Integer.class)).isEqualTo(1);
   }
 
   static class SimpleGuiceModule extends AbstractModule {
-    @Provides
+    @com.google.inject.Provides
     String aString(Integer i) {
       return i.toString();
     }
@@ -61,8 +64,73 @@ public class DaggerAdapterTest extends TestCase {
 
   public void testInteractionWithGuiceModules() {
     Injector i =
-        Guice.createInjector(new SimpleGuiceModule(), DaggerAdapter.from(new SimpleDaggerModule()));
-    assertEquals("1", i.getInstance(String.class));
+        createInjector(new SimpleGuiceModule(), DaggerAdapter.from(new SimpleDaggerModule()));
+    assertThat(i.getInstance(String.class)).isEqualTo("1");
+  }
+
+  @dagger.Module(includes = SimpleDaggerModule.class)
+  static class Includer {
+    @dagger.Provides
+    String anInteger(Integer integer) {
+      return integer.toString();
+    }
+  }
+
+  public void testSimpleInclusion() {
+    Injector i = createInjector(DaggerAdapter.from(new Includer()));
+    String actual = i.getInstance(String.class);
+    assertThat(actual).isEqualTo("1");
+  }
+
+  public void testInclusionWithDuplicateInstances() {
+    try {
+      createInjector(DaggerAdapter.from(new Includer(), new Includer()));
+      fail("Should have thrown.");
+    } catch (CreationException e) {
+      assertThat(e.getErrorMessages()).hasSize(2);
+      // Unsure if the order of messages will always be consistent.
+      boolean hasError = false;
+      for (Message m : e.getErrorMessages()) {
+        hasError |= m.getMessage().contains("was manually instantiated 2 times");
+      }
+      assertWithMessage(
+              "Creation exception did not contain duplicate instance error: "
+                  + e.getErrorMessages())
+          .that(hasError)
+          .isTrue();
+    }
+  }
+
+  @dagger.Module
+  static class Dupe {
+    @dagger.Provides
+    Integer integer() {
+      return 1;
+    }
+  }
+
+  @dagger.Module(includes = {Dupe.class, Dupe.class})
+  static class DupeIncluder {}
+
+  public void testInclusionDeDuping() {
+    Injector i = createInjector(DaggerAdapter.from(DupeIncluder.class));
+    assertThat(i.getInstance(Integer.class)).isEqualTo(1);
+  }
+
+  @dagger.Module(includes = CycleIncluder.class)
+  static class Cycle {
+    @dagger.Provides
+    Integer integer() {
+      return 1;
+    }
+  }
+
+  @dagger.Module(includes = Cycle.class)
+  static class CycleIncluder {}
+
+  public void testInclusionCycleHandling() {
+    Injector i = createInjector(DaggerAdapter.from(CycleIncluder.class));
+    assertThat(i.getInstance(Integer.class)).isEqualTo(1);
   }
 
   @dagger.Module
@@ -85,9 +153,9 @@ public class DaggerAdapterTest extends TestCase {
 
   public void testSetBindings() {
     Injector i =
-        Guice.createInjector(
+        createInjector(
             DaggerAdapter.from(new SetBindingDaggerModule1(), new SetBindingDaggerModule2()));
-    assertEquals(ImmutableSet.of(3, 5), i.getInstance(new Key<Set<Integer>>() {}));
+    assertThat(i.getInstance(new Key<Set<Integer>>() {})).containsExactly(3, 5);
   }
 
   static class MultibindingGuiceModule implements Module {
@@ -101,9 +169,44 @@ public class DaggerAdapterTest extends TestCase {
 
   public void testSetBindingsWithGuiceModule() {
     Injector i =
-        Guice.createInjector(
+        createInjector(
             new MultibindingGuiceModule(),
             DaggerAdapter.from(new SetBindingDaggerModule1(), new SetBindingDaggerModule2()));
-    assertEquals(ImmutableSet.of(13, 3, 5, 8), i.getInstance(new Key<Set<Integer>>() {}));
+    assertThat(i.getInstance(new Key<Set<Integer>>() {})).containsExactly(13, 3, 5, 8);
+  }
+
+  @dagger.Module
+  static class DaggerModuleWithGuiceProvides {
+    @com.google.inject.Provides
+    Integer anInteger() {
+      return 1;
+    }
+  }
+
+  public void testGuiceProvidesOnDaggerModule() {
+    try {
+      createInjector(DaggerAdapter.from(DaggerModuleWithGuiceProvides.class));
+      fail("Should have thrown.");
+    } catch (CreationException e) {
+      assertThat(e.getErrorMessages()).hasSize(1);
+      Message m = e.getErrorMessages().iterator().next();
+      assertThat(m.getMessage()).contains(" instead of @dagger.Provides");
+    }
+  }
+
+  private static final Module INJECTOR_CONFIG =
+      new Module() {
+        @Override
+        public void configure(Binder binder) {
+          // We want very explicit behavior so we don't error on the wrong thing,
+          // or succeed accidentally.
+          binder.requireExactBindingAnnotations();
+          binder.requireAtInjectOnConstructors();
+        }
+      };
+
+  private Injector createInjector(Module... modules) {
+    return Guice.createInjector(
+        ImmutableSet.<Module>builder().add(INJECTOR_CONFIG).add(modules).build());
   }
 }

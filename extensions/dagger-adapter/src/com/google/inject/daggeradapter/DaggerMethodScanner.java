@@ -38,8 +38,15 @@ import java.util.Set;
  */
 final class DaggerMethodScanner extends ModuleAnnotatedMethodScanner {
   static final DaggerMethodScanner INSTANCE = new DaggerMethodScanner();
-  private static final ImmutableSet<Class<Provides>> ANNOTATIONS =
-      ImmutableSet.of(dagger.Provides.class);
+  private static final ImmutableSet<Class<? extends Annotation>> ANNOTATIONS =
+      ImmutableSet.of(
+          dagger.Provides.class,
+          // The following are consumed for validation, to ensure that dagger modules
+          // get annotated by non-dagger annotations.
+          com.google.inject.Provides.class,
+          com.google.inject.multibindings.ProvidesIntoMap.class,
+          com.google.inject.multibindings.ProvidesIntoSet.class,
+          com.google.inject.multibindings.ProvidesIntoOptional.class);
 
   @Override
   public Set<? extends Class<? extends Annotation>> annotationClasses() {
@@ -50,6 +57,9 @@ final class DaggerMethodScanner extends ModuleAnnotatedMethodScanner {
   public <T> Key<T> prepareMethod(
       Binder binder, Annotation rawAnnotation, Key<T> key, InjectionPoint injectionPoint) {
     Method providesMethod = (Method) injectionPoint.getMember();
+    if (!validateAnnotation(binder, providesMethod, rawAnnotation)) {
+      return Key.get(key.getTypeLiteral(), UniqueAnnotations.create()); // don't bind bad method.
+    }
     Provides annotation = (Provides) rawAnnotation;
     if (providesMethod.isAnnotationPresent(IntoSet.class)) {
       return processSetBinding(binder, key);
@@ -79,6 +89,16 @@ final class DaggerMethodScanner extends ModuleAnnotatedMethodScanner {
         binder.addError("Unknown @Provides type " + annotation.type() + ".", providesMethod);
         return key;
     }
+  }
+
+  private boolean validateAnnotation(Binder binder, Method method, Annotation annotation) {
+    if (annotation.annotationType().getName().startsWith("com.google.inject")) {
+      binder.addError(
+          "Method %s was annotated with %s instead of @dagger.Provides.",
+          method, annotation.annotationType().getName());
+      return false;
+    }
+    return true;
   }
 
   private static <T> Key<T> processSetBinding(Binder binder, Key<T> key) {
